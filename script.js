@@ -18,6 +18,7 @@ const state = {
     isHost: false,
     hasControl: false,
     cursors: {},
+    lastLoadedIframeUrl: '',
 };
 
 function hasPermission(clientId) {
@@ -39,15 +40,19 @@ function render() {
     // --- Render Host/Viewer UI ---
     elements.hostControls.classList.toggle('hidden', !state.isHost);
     
-    // Keystroke display is only visible to host, who has the controls div
+    // Keystroke display and URL input are only visible to host
     if(state.isHost) {
         elements.keystrokeDisplay.textContent = room.roomState.lastKeystrokes || '';
+        if (document.activeElement !== elements.urlInput) {
+            elements.urlInput.value = room.roomState.iframeUrl || '';
+        }
     }
 
     // --- Sync Iframe URL ---
     const targetUrl = room.roomState.iframeUrl || 'about:blank';
-    if (elements.sharedIframe.src !== targetUrl) {
+    if (targetUrl !== state.lastLoadedIframeUrl) {
         elements.sharedIframe.src = targetUrl;
+        state.lastLoadedIframeUrl = targetUrl;
     }
     
     // --- Update overlay pointer events ---
