@@ -1,8 +1,7 @@
 import { IFrameBrowserAgent } from 'iframe-browser-agent';
 
-const urlParamsForInit = new URLSearchParams(window.location.search);
-const roomNameForInit = urlParamsForInit.get('room');
-const room = new WebsimSocket({ room: roomNameForInit });
+// --- Global State ---
+let room; // Will be initialized in main()
 
 const elements = {
     lobbyContainer: document.getElementById('lobby-container'),
@@ -125,6 +124,7 @@ function render() {
             userItem.dataset.clientId = clientId;
 
             const isPeerHost = clientId === room.roomState.hostClientId;
+            // A user always has control over themselves, used for event listeners.
             const peerHasControl = hasPermission(clientId);
 
             let roleText = 'Viewer';
@@ -221,6 +221,8 @@ function setupAppEventListeners() {
     
     // --- Control keyboard input ---
     document.addEventListener('keydown', (e) => {
+        // hasControl is checked here instead of canThisClientControl()
+        // because we need to check the state that was set during the last render cycle.
         if (!state.hasControl) return;
 
         // Don't capture input from the URL bar
@@ -338,6 +340,8 @@ async function main() {
     elements.lobbyContainer.classList.add('hidden');
     elements.appContainer.classList.remove('hidden');
 
+    // Initialize the room object now that we have a room name.
+    room = new WebsimSocket({ room: roomName });
     await room.initialize();
     
     // Determine host
