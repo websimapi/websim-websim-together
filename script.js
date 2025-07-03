@@ -1,3 +1,5 @@
+import { IFrameBrowserAgent } from 'iframe-browser-agent';
+
 const room = new WebsimSocket();
 
 const elements = {
@@ -19,6 +21,7 @@ const state = {
     hasControl: false,
     cursors: {},
     lastLoadedIframeUrl: '',
+    browserAgent: null,
 };
 
 function hasPermission(clientId) {
@@ -51,14 +54,25 @@ function render() {
     // --- Sync Iframe URL ---
     const targetUrl = room.roomState.iframeUrl || 'about:blank';
     if (targetUrl !== state.lastLoadedIframeUrl) {
-        elements.sharedIframe.src = targetUrl;
+        // Only host's agent navigates. Viewers just set src.
+        if (state.isHost && state.browserAgent) {
+             state.browserAgent.navigate(targetUrl);
+        } else {
+            elements.sharedIframe.src = targetUrl;
+        }
         state.lastLoadedIframeUrl = targetUrl;
+    }
+
+    // --- Sync Scroll Position ---
+    if (!state.isHost && room.roomState.scroll) {
+        elements.iframeWrapper.scrollLeft = room.roomState.scroll.x;
+        elements.iframeWrapper.scrollTop = room.roomState.scroll.y;
     }
     
     // --- Update overlay pointer events ---
-    // If user has control, overlay is transparent to events to allow interaction
+    // If client is host, overlay is transparent to events.
     // Otherwise, it blocks events to the iframe.
-    elements.overlay.style.pointerEvents = state.hasControl ? 'none' : 'auto';
+    elements.overlay.style.pointerEvents = state.isHost ? 'none' : 'auto';
 
     // --- Render Cursors ---
     const seenCursors = new Set();
@@ -106,24 +120,28 @@ function render() {
         for (const [clientId, peer] of Object.entries(room.peers)) {
             const userItem = document.createElement('li');
             userItem.className = 'user-item';
+            userItem.dataset.clientId = clientId;
 
             const isPeerHost = clientId === room.roomState.hostClientId;
             const peerHasControl = hasPermission(clientId);
 
             let roleText = 'Viewer';
-            if (isPeerHost) roleText = 'Host';
-            else if (peerHasControl) roleText = 'Controller';
+            if (isPeerHost) {
+                roleText = 'Host';
+                userItem.classList.add('is-host');
+            } else {
+                userItem.classList.add(peerHasControl ? 'has-control' : 'no-control');
+                roleText = peerHasControl ? 'Controller' : 'Viewer';
+            }
+            
+            const avatarUrl = peer.avatarUrl || '/default-pfp.png';
 
             userItem.innerHTML = `
-                <img src="${peer.avatarUrl}" alt="${peer.username}">
+                <img src="${avatarUrl}" alt="${peer.username}">
                 <div class="user-info">
                     <div class="username">${peer.username} ${clientId === room.clientId ? '(You)' : ''}</div>
                     <div class="role">${roleText}</div>
                 </div>
-                ${!isPeerHost ? `
-                <label for="control-${clientId}">Control:</label>
-                <input type="checkbox" id="control-${clientId}" data-client-id="${clientId}" ${peerHasControl ? 'checked' : ''}>
-                ` : ''}
             `;
             elements.userList.appendChild(userItem);
         }
@@ -158,35 +176,42 @@ function setupAppEventListeners() {
         room.updatePresence({ mouseX, mouseY });
     });
     
-    // --- Iframe wrapper scroll ---
+    // --- Iframe wrapper scroll (for everyone) ---
     elements.iframeWrapper.addEventListener('wheel', (e) => {
         if (!state.hasControl) return;
-        e.preventDefault(); // prevent local scroll
+        // prevent local scroll for non-hosts to avoid de-sync
+        if (!state.isHost) e.preventDefault();
         
+        const scrollTarget = state.isHost ? elements.iframeWrapper : null;
+
         room.send({
             type: 'request_action',
             action: {
                 type: 'scroll',
                 deltaX: e.deltaX,
                 deltaY: e.deltaY,
+                // Pass current scroll for host to apply delta correctly
+                currentScroll: scrollTarget ? { x: scrollTarget.scrollLeft, y: scrollTarget.scrollTop } : null
             }
         });
 
     }, { passive: false });
 
-    // --- Control click ---
+    // --- Control click (for everyone) ---
     document.addEventListener('click', (e) => {
         if (!state.hasControl) return;
 
         const rect = elements.iframeWrapper.getBoundingClientRect();
         // Check if click is inside the iframe wrapper
         if (e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom) {
+             const clickX = e.clientX - rect.left;
+             const clickY = e.clientY - rect.top;
              room.send({
                 type: 'request_action',
                 action: {
                     type: 'click',
-                    x: e.pageX,
-                    y: e.pageY,
+                    x: clickX, // relative to viewport
+                    y: clickY, // relative to viewport
                 }
             });
         }
@@ -201,16 +226,19 @@ function setupAppEventListeners() {
         
         e.preventDefault();
 
+        // Use e.code for layout-independent key representation
         let key = e.key;
-        if (key.length > 1) { // e.g., 'Backspace', 'Enter'
-            key = `[${key}]`;
+        if (key.length > 1 && key !== 'Backspace') {
+             key = `[${key}]`;
         }
-
+       
         room.send({
             type: 'request_action',
             action: {
                 type: 'keydown',
-                key: key,
+                key: e.key,
+                code: e.code,
+                displayKey: key, // For visual feedback
             }
         });
     });
@@ -225,17 +253,19 @@ function setupAppEventListeners() {
         room.updateRoomState({ iframeUrl: url });
     });
 
-    elements.userList.addEventListener('change', (e) => {
-        if (!state.isHost || e.target.type !== 'checkbox') return;
+    elements.userList.addEventListener('click', (e) => {
+        if (!state.isHost) return;
+        const userItem = e.target.closest('.user-item');
+        if (!userItem || userItem.classList.contains('is-host')) return;
 
-        const clientId = e.target.dataset.clientId;
-        const canControl = e.target.checked;
+        const clientId = userItem.dataset.clientId;
+        const currentPermissions = room.roomState.permissions || {};
+        const userHasControl = currentPermissions[clientId]?.canControl || false;
 
-        const permissions = room.roomState.permissions || {};
         room.updateRoomState({
             permissions: {
-                ...permissions,
-                [clientId]: { canControl }
+                ...currentPermissions,
+                [clientId]: { canControl: !userHasControl }
             }
         });
     });
@@ -248,43 +278,47 @@ function handleRoomMessages(event) {
     // Host processes action requests from authorized controllers
     if (state.isHost && data.type === 'request_action') {
         if (hasPermission(fromClientId)) {
-             // Host relays the action to everyone
-            room.send({ ...data.action, relayedByHost: true });
+             // Host performs the action directly
+             const action = data.action;
+             switch (action.type) {
+                case 'click':
+                    state.browserAgent?.click(action.x, action.y);
+                    // Also broadcast a visual click for all clients
+                    room.send({
+                        type: 'visual_click',
+                        x: action.x + elements.iframeWrapper.getBoundingClientRect().left,
+                        y: action.y + elements.iframeWrapper.getBoundingClientRect().top,
+                    });
+                    break;
+                case 'scroll':
+                    state.browserAgent?.scroll(action.deltaX, action.deltaY);
+                    break;
+                case 'keydown':
+                    state.browserAgent?.type(action);
+                    
+                    // Update keystroke display state
+                    let currentStrokes = room.roomState.lastKeystrokes || '';
+                    let newStrokes;
+                    if (action.key === 'Backspace') {
+                        newStrokes = currentStrokes.slice(0, -1);
+                    } else {
+                         newStrokes = (currentStrokes + action.displayKey).slice(-50); // Keep last 50 chars
+                    }
+                    room.updateRoomState({ lastKeystrokes: newStrokes });
+                    break;
+             }
         }
         return;
     }
-    
-    // All clients (including host) perform actions relayed by the host
-    if (!data.relayedByHost) return;
 
-    switch (data.type) {
-        case 'click':
-            const indicator = document.createElement('div');
-            indicator.className = 'click-indicator';
-            indicator.style.left = `${data.x}px`;
-            indicator.style.top = `${data.y}px`;
-            document.body.appendChild(indicator); // Append to body to avoid clipping
-            setTimeout(() => indicator.remove(), 500);
-            break;
-        case 'scroll':
-            elements.iframeWrapper.scrollTop += data.deltaY;
-            elements.iframeWrapper.scrollLeft += data.deltaX;
-            break;
-        case 'keydown':
-            let key = data.key;
-            const currentStrokes = room.roomState.lastKeystrokes || '';
-            let newStrokes;
-            if (key === 'Backspace') {
-                newStrokes = currentStrokes.slice(0, -1);
-            } else {
-                 if (key.length > 1) key = `[${key}]`;
-                 newStrokes = (currentStrokes + key).slice(-50); // Keep last 50 chars
-            }
-            // Only host updates the room state for keystrokes
-            if (state.isHost) {
-                room.updateRoomState({ lastKeystrokes: newStrokes });
-            }
-            break;
+    // This is for visual effects for all clients
+    if (data.type === 'visual_click') {
+        const indicator = document.createElement('div');
+        indicator.className = 'click-indicator';
+        indicator.style.left = `${data.x}px`;
+        indicator.style.top = `${data.y}px`;
+        document.body.appendChild(indicator); // Append to body to avoid clipping
+        setTimeout(() => indicator.remove(), 500);
     }
 }
 
@@ -311,6 +345,24 @@ async function main() {
             iframeUrl: 'https://websim.com/docs',
             permissions: {},
             lastKeystrokes: '',
+            scroll: { x: 0, y: 0 },
+        });
+    }
+
+    state.isHost = room.roomState.hostClientId === room.clientId;
+
+    if (state.isHost) {
+        state.browserAgent = new IFrameBrowserAgent(elements.sharedIframe);
+        await state.browserAgent.initialize();
+
+        state.browserAgent.on('navigation', (newUrl) => {
+            if (newUrl !== room.roomState.iframeUrl) {
+                room.updateRoomState({ iframeUrl: newUrl });
+            }
+        });
+
+        state.browserAgent.on('scroll', (scroll) => {
+             room.updateRoomState({ scroll: { x: scroll.scrollX, y: scroll.scrollY } });
         });
     }
 

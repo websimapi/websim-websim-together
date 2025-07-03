@@ -100,6 +100,7 @@ body, html {
   list-style-type: none;
   padding: 0;
   margin: 0;
+  cursor: pointer;
 }
 
 .user-item {
@@ -109,6 +110,18 @@ body, html {
   padding: 5px;
   border-radius: 4px;
   background: #fff;
+  border: 2px solid transparent;
+  transition: border-color 0.3s, background-color 0.3s;
+}
+
+.user-item.has-control {
+  border-color: #28a745; /* green */
+  background-color: #e9f5ec;
+}
+
+.user-item.no-control {
+    border-color: #dc3545; /* red */
+    background-color: #fbebee;
 }
 
 .user-item img {
@@ -127,6 +140,10 @@ body, html {
 .user-info .role {
     font-size: 0.8em;
     color: #555;
+}
+
+.user-item.is-host {
+    cursor: default;
 }
 
 .user-item label {
@@ -178,7 +195,8 @@ body, html {
   width: 100%;
   height: 100%;
   z-index: 10;
-  pointer-events: auto; /* Changed to auto to capture events */
+  /* Always block events for non-hosts, let host's overlay be transparent */
+  pointer-events: auto;
 }
 
 .remote-cursor {
