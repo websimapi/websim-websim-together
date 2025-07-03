@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Websim Together</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app-container">
+    <div id="host-controls" class="hidden">
+      <label for="url-input">URL:</label>
+      <input type="text" id="url-input" placeholder="https://websim.com">
+      <div id="permissions-panel">
+        <h3>Permissions</h3>
+        <ul id="user-list"></ul>
+      </div>
+      <div id="keystroke-display-container">
+          Shared Keystrokes: <span id="keystroke-display"></span>
+      </div>
+    </div>
+    <div id="session-container">
+        <div id="iframe-wrapper">
+            <iframe id="shared-iframe" src="about:blank" sandbox="allow-forms allow-modals allow-pointer-lock allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts allow-top-navigation"></iframe>
+            <div id="overlay"></div>
+        </div>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+<script defer src="https://static.cloudflareinsights.com/beacon.min.js/v8c78df7c7c0f484497ecbca7046644da1771523124516" integrity="sha512-8DS7rgIrAmghBFwoOTujcf6D9rXvH8xm8JQ1Ja01h9QX8EzXldiszufYa4IFfKdLUKTTrnSFXLDkUEOTrZQ8Qg==" data-cf-beacon='{"version":"2024.11.0","token":"4c6229722a6346bc8eb5cb0e5eae5d41","server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
+</body>
+</html>
+
