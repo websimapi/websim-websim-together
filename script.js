@@ -1,6 +1,8 @@
 import { IFrameBrowserAgent } from 'iframe-browser-agent';
 
-const room = new WebsimSocket();
+const urlParamsForInit = new URLSearchParams(window.location.search);
+const roomNameForInit = urlParamsForInit.get('room');
+const room = new WebsimSocket({ room: roomNameForInit });
 
 const elements = {
     lobbyContainer: document.getElementById('lobby-container'),
@@ -286,8 +288,8 @@ function handleRoomMessages(event) {
                     // Also broadcast a visual click for all clients
                     room.send({
                         type: 'visual_click',
-                        x: action.x + elements.iframeWrapper.getBoundingClientRect().left,
-                        y: action.y + elements.iframeWrapper.getBoundingClientRect().top,
+                        x: action.x + elements.iframeWrapper.getBoundingClientRect().left - elements.iframeWrapper.scrollLeft,
+                        y: action.y + elements.iframeWrapper.getBoundingClientRect().top - elements.iframeWrapper.scrollTop,
                     });
                     break;
                 case 'scroll':
