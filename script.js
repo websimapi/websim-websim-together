@@ -1,6 +1,10 @@
 const room = new WebsimSocket();
 
 const elements = {
+    lobbyContainer: document.getElementById('lobby-container'),
+    roomNameInput: document.getElementById('room-name-input'),
+    joinRoomBtn: document.getElementById('join-room-btn'),
+    appContainer: document.getElementById('app-container'),
     hostControls: document.getElementById('host-controls'),
     urlInput: document.getElementById('url-input'),
     userList: document.getElementById('user-list'),
@@ -17,6 +21,7 @@ const state = {
 };
 
 function hasPermission(clientId) {
+    if (room.roomState.hostClientId === clientId) return true;
     const permissions = room.roomState.permissions || {};
     return permissions[clientId]?.canControl || false;
 }
@@ -44,6 +49,11 @@ function render() {
     if (elements.sharedIframe.src !== targetUrl) {
         elements.sharedIframe.src = targetUrl;
     }
+    
+    // --- Update overlay pointer events ---
+    // If user has control, overlay is transparent to events to allow interaction
+    // Otherwise, it blocks events to the iframe.
+    elements.overlay.style.pointerEvents = state.hasControl ? 'none' : 'auto';
 
     // --- Render Cursors ---
     const seenCursors = new Set();
@@ -56,10 +66,10 @@ function render() {
             cursorEl.id = `cursor-${clientId}`;
             cursorEl.className = 'remote-cursor';
             cursorEl.innerHTML = `
-                <img src="cursor.png" alt="cursor">
+                <img src="/cursor.png" alt="cursor">
                 <span class="cursor-label"></span>
             `;
-            elements.overlay.appendChild(cursorEl);
+            document.body.appendChild(cursorEl); // Append to body to avoid iframe wrapper clipping
         }
 
         const peerInfo = room.peers[clientId];
@@ -67,8 +77,13 @@ function render() {
             cursorEl.querySelector('.cursor-label').textContent = peerInfo.username;
         }
 
-        cursorEl.style.left = `${presence.mouseX}px`;
-        cursorEl.style.top = `${presence.mouseY}px`;
+        // Adjust cursor position based on iframe wrapper's scroll and offset
+        const rect = elements.iframeWrapper.getBoundingClientRect();
+        const cursorX = presence.mouseX - elements.iframeWrapper.scrollLeft + rect.left;
+        const cursorY = presence.mouseY - elements.iframeWrapper.scrollTop + rect.top;
+
+        cursorEl.style.left = `${cursorX}px`;
+        cursorEl.style.top = `${cursorY}px`;
         cursorEl.style.display = 'block';
         seenCursors.add(cursorEl.id);
     }
@@ -110,11 +125,32 @@ function render() {
     }
 }
 
-function setupEventListeners() {
+function setupLobbyListeners() {
+    function joinRoom() {
+        const roomName = elements.roomNameInput.value.trim();
+        if (roomName) {
+            const url = new URL(window.location);
+            url.searchParams.set('room', roomName);
+            window.location.href = url.href;
+        }
+    }
+
+    elements.joinRoomBtn.addEventListener('click', joinRoom);
+    elements.roomNameInput.addEventListener('keyup', (e) => {
+        if (e.key === 'Enter') {
+            joinRoom();
+        }
+    });
+}
+
+function setupAppEventListeners() {
     // --- Mouse movement ---
     document.addEventListener('mousemove', (e) => {
-        // We use pageX/pageY to get coordinates relative to the whole page
-        room.updatePresence({ mouseX: e.pageX, mouseY: e.pageY });
+        // Calculate position relative to the iframe wrapper's content area
+        const rect = elements.iframeWrapper.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left + elements.iframeWrapper.scrollLeft;
+        const mouseY = e.clientY - rect.top + elements.iframeWrapper.scrollTop;
+        room.updatePresence({ mouseX, mouseY });
     });
     
     // --- Iframe wrapper scroll ---
@@ -122,14 +158,13 @@ function setupEventListeners() {
         if (!state.hasControl) return;
         e.preventDefault(); // prevent local scroll
         
-        const newScrollTop = elements.iframeWrapper.scrollTop + e.deltaY;
-        const newScrollLeft = elements.iframeWrapper.scrollLeft + e.deltaX;
-        
-        // Broadcast the scroll event
         room.send({
-            type: 'scroll',
-            scrollTop: newScrollTop,
-            scrollLeft: newScrollLeft,
+            type: 'request_action',
+            action: {
+                type: 'scroll',
+                deltaX: e.deltaX,
+                deltaY: e.deltaY,
+            }
         });
 
     }, { passive: false });
@@ -142,9 +177,12 @@ function setupEventListeners() {
         // Check if click is inside the iframe wrapper
         if (e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom) {
              room.send({
-                type: 'click',
-                x: e.pageX,
-                y: e.pageY,
+                type: 'request_action',
+                action: {
+                    type: 'click',
+                    x: e.pageX,
+                    y: e.pageY,
+                }
             });
         }
     });
@@ -163,22 +201,20 @@ function setupEventListeners() {
             key = `[${key}]`;
         }
 
-        const currentStrokes = room.roomState.lastKeystrokes || '';
-        let newStrokes;
-        if (e.key === 'Backspace') {
-            newStrokes = currentStrokes.slice(0, -1);
-        } else {
-            newStrokes = (currentStrokes + key).slice(-50); // Keep last 50 chars
-        }
-        
-        room.updateRoomState({ lastKeystrokes: newStrokes });
+        room.send({
+            type: 'request_action',
+            action: {
+                type: 'keydown',
+                key: key,
+            }
+        });
     });
 
     // --- Host controls ---
     elements.urlInput.addEventListener('change', (e) => {
         if (!state.isHost) return;
         let url = e.target.value.trim();
-        if (!url.startsWith('http://') && !url.startsWith('https://')) {
+        if (url && !url.startsWith('http://') && !url.startsWith('https://')) {
             url = 'https://' + url;
         }
         room.updateRoomState({ iframeUrl: url });
@@ -190,9 +226,10 @@ function setupEventListeners() {
         const clientId = e.target.dataset.clientId;
         const canControl = e.target.checked;
 
+        const permissions = room.roomState.permissions || {};
         room.updateRoomState({
             permissions: {
-                ...room.roomState.permissions,
+                ...permissions,
                 [clientId]: { canControl }
             }
         });
@@ -201,32 +238,72 @@ function setupEventListeners() {
 
 function handleRoomMessages(event) {
     const data = event.data;
+    const fromClientId = data.clientId;
+
+    // Host processes action requests from authorized controllers
+    if (state.isHost && data.type === 'request_action') {
+        if (hasPermission(fromClientId)) {
+             // Host relays the action to everyone
+            room.send({ ...data.action, relayedByHost: true });
+        }
+        return;
+    }
+    
+    // All clients (including host) perform actions relayed by the host
+    if (!data.relayedByHost) return;
+
     switch (data.type) {
         case 'click':
             const indicator = document.createElement('div');
             indicator.className = 'click-indicator';
             indicator.style.left = `${data.x}px`;
             indicator.style.top = `${data.y}px`;
-            elements.overlay.appendChild(indicator);
+            document.body.appendChild(indicator); // Append to body to avoid clipping
             setTimeout(() => indicator.remove(), 500);
             break;
         case 'scroll':
-            // All clients, including the sender, will scroll to the same position
-            // ensuring sync. This is idempotent.
-            elements.iframeWrapper.scrollTop = data.scrollTop;
-            elements.iframeWrapper.scrollLeft = data.scrollLeft;
+            elements.iframeWrapper.scrollTop += data.deltaY;
+            elements.iframeWrapper.scrollLeft += data.deltaX;
+            break;
+        case 'keydown':
+            let key = data.key;
+            const currentStrokes = room.roomState.lastKeystrokes || '';
+            let newStrokes;
+            if (key === 'Backspace') {
+                newStrokes = currentStrokes.slice(0, -1);
+            } else {
+                 if (key.length > 1) key = `[${key}]`;
+                 newStrokes = (currentStrokes + key).slice(-50); // Keep last 50 chars
+            }
+            // Only host updates the room state for keystrokes
+            if (state.isHost) {
+                room.updateRoomState({ lastKeystrokes: newStrokes });
+            }
             break;
     }
 }
 
 async function main() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const roomName = urlParams.get('room');
+
+    if (!roomName) {
+        elements.appContainer.classList.add('hidden');
+        elements.lobbyContainer.classList.remove('hidden');
+        setupLobbyListeners();
+        return;
+    }
+    
+    elements.lobbyContainer.classList.add('hidden');
+    elements.appContainer.classList.remove('hidden');
+
     await room.initialize();
     
     // Determine host
     if (!room.roomState.hostClientId) {
         await room.updateRoomState({
             hostClientId: room.clientId,
-            iframeUrl: 'https://websim.com',
+            iframeUrl: 'https://websim.com/docs',
             permissions: {},
             lastKeystrokes: '',
         });
@@ -239,8 +316,7 @@ async function main() {
     // Initial render
     render();
     
-    setupEventListeners();
+    setupAppEventListeners();
 }
 
 main();
-

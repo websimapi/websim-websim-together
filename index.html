@@ -5,7 +5,16 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div id="app-container">
+  <div id="lobby-container">
+    <h1>Websim Together</h1>
+    <p>Create a room or join an existing one to browse a website together.</p>
+    <div class="room-input-group">
+      <input type="text" id="room-name-input" placeholder="Enter a room name...">
+      <button id="join-room-btn">Create or Join Room</button>
+    </div>
+  </div>
+
+  <div id="app-container" class="hidden">
     <div id="host-controls" class="hidden">
       <label for="url-input">URL:</label>
       <input type="text" id="url-input" placeholder="https://websim.com">
